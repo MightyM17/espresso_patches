@@ -1,0 +1,156 @@
+project external/wpa_supplicant_8/              (*** NO BRANCH ***)
+ -m     wpa_supplicant/wpa_supplicant_conf.mk
+project frameworks/av/                          (*** NO BRANCH ***)
+ -m     media/libstagefright/ACodec.cpp
+ -m     media/libstagefright/Android.bp
+ -m     media/libstagefright/omx/OMXUtils.cpp
+project hardware/broadcom/wlan/                 (*** NO BRANCH ***)
+ -m     bcmdhd/config/config-bcm.mk
+project system/core/                            (*** NO BRANCH ***)
+ -m     libsuspend/Android.bp
+ -m     libsuspend/autosuspend.c
+ --     libsuspend/autosuspend_earlysuspend.cpp
+ -m     libsuspend/autosuspend_ops.h
+
+project external/wpa_supplicant_8/
+diff --git a/wpa_supplicant/wpa_supplicant_conf.mk b/wpa_supplicant/wpa_supplic>
+index 4293976..7d22066 100644
+--- a/wpa_supplicant/wpa_supplicant_conf.mk
++++ b/wpa_supplicant/wpa_supplicant_conf.mk
+@@ -16,7 +16,7 @@ include $(CLEAR_VARS)
+ LOCAL_MODULE := wpa_supplicant.conf
+ LOCAL_MODULE_CLASS := ETC
+ LOCAL_MODULE_TAGS := optional
+-LOCAL_MODULE_PATH := $(TARGET_OUT_VENDOR)/etc/wifi
++LOCAL_MODULE_PATH := $(TARGET_OUT_ETC)/etc/wifi
+
+ include $(BUILD_SYSTEM)/base_rules.mk
+
+
+project frameworks/av/
+diff --git a/media/libstagefright/ACodec.cpp b/media/libstagefright/ACodec.cpp
+index 014dfa9..92b5957 100644
+--- a/media/libstagefright/ACodec.cpp
++++ b/media/libstagefright/ACodec.cpp
+@@ -1176,6 +1176,12 @@ status_t ACodec::configureOutputBuffersFromNativeWindow(
+     // 2. try to allocate two (2) additional buffers to reduce starvation from
+     //    the consumer
+     //    plus an extra buffer to account for incorrect minUndequeuedBufs
++#ifdef BOARD_CANT_REALLOCATE_OMX_BUFFERS
++    // Some devices don't like to set OMX_IndexParamPortDefinition at this
++    // point (even with an unmodified def), so skip it if possible.
++    // This check was present in KitKat.
++    if (def.nBufferCountActual < def.nBufferCountMin + *minUndequeuedBuffers) {
++#endif
+     for (OMX_U32 extraBuffers = 2 + 1; /* condition inside loop */; extraBuffe>
+         OMX_U32 newBufferCount =
+             def.nBufferCountMin + *minUndequeuedBuffers + extraBuffers;
+@@ -1195,6 +1201,9 @@ status_t ACodec::configureOutputBuffersFromNativeWindow(
+             return err;
+         }
+     }
++#ifdef BOARD_CANT_REALLOCATE_OMX_BUFFERS
++    }
++#endif
+
+     err = native_window_set_buffer_count(
+             mNativeWindow.get(), def.nBufferCountActual);
+diff --git a/media/libstagefright/Android.bp b/media/libstagefright/Android.bp
+index d8f96fd..84829b8 100644
+--- a/media/libstagefright/Android.bp
++++ b/media/libstagefright/Android.bp
+@@ -204,6 +204,7 @@ cc_library_shared {
+         "-Werror",
+         "-Wno-error=deprecated-declarations",
+         "-Wall",
++       "-DBOARD_CANT_REALLOCATE_OMX_BUFFERS",
+     ],
+
+     version_script: "exports.lds",
+diff --git a/media/libstagefright/omx/OMXUtils.cpp b/media/libstagefright/omx/O>
+index f7b569d..8baa691 100644
+--- a/media/libstagefright/omx/OMXUtils.cpp
++++ b/media/libstagefright/omx/OMXUtils.cpp
+@@ -215,6 +215,7 @@ bool DescribeDefaultColorFormat(DescribeColorFormat2Params >
+         fmt != OMX_COLOR_FormatYUV420PackedPlanar &&
+         fmt != OMX_COLOR_FormatYUV420SemiPlanar &&
+         fmt != OMX_COLOR_FormatYUV420PackedSemiPlanar &&
++       fmt != OMX_TI_COLOR_FormatYUV420PackedSemiPlanar &&
+         fmt != (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_YV12) {
+         ALOGW("do not know color format 0x%x = %d", fmt, fmt);
+         if (fmt == OMX_COLOR_FormatYUV420Planar16) {
+@@ -294,6 +295,7 @@ bool DescribeDefaultColorFormat(DescribeColorFormat2Params >
+         case OMX_COLOR_FormatYUV420SemiPlanar:
+             // FIXME: NV21 for sw-encoder, NV12 for decoder and hw-encoder
+         case OMX_COLOR_FormatYUV420PackedSemiPlanar:
++       case OMX_TI_COLOR_FormatYUV420PackedSemiPlanar:
+             // NV12
+             image.mPlane[image.U].mOffset = params.nStride * params.nSliceHeig>
+             image.mPlane[image.U].mColInc = 2;
+
+project hardware/broadcom/wlan/
+diff --git a/bcmdhd/config/config-bcm.mk b/bcmdhd/config/config-bcm.mk
+index 16bf51d..17e883d 100644
+--- a/bcmdhd/config/config-bcm.mk
++++ b/bcmdhd/config/config-bcm.mk
+@@ -16,6 +16,8 @@
+
+ ########################
+ PRODUCT_COPY_FILES += \
++    hardware/broadcom/wlan/bcmdhd/config/wpa_supplicant_overlay.conf:system/et>
++    hardware/broadcom/wlan/bcmdhd/config/p2p_supplicant_overlay.conf:system/et>
+     hardware/broadcom/wlan/bcmdhd/config/wpa_supplicant_overlay.conf:$(TARGET_>
+     hardware/broadcom/wlan/bcmdhd/config/p2p_supplicant_overlay.conf:$(TARGET_>
+ ########################
+
+project system/core/
+diff --git a/libsuspend/Android.bp b/libsuspend/Android.bp
+index b3e36c2..2115885 100644
+--- a/libsuspend/Android.bp
++++ b/libsuspend/Android.bp
+@@ -9,6 +9,7 @@ cc_library {
+
+     srcs: [
+         "autosuspend.c",
++       "autosuspend_earlysuspend.cpp",
+         "autosuspend_wakeup_count.cpp",
+     ],
+     export_include_dirs: ["include"],
+diff --git a/libsuspend/autosuspend.c b/libsuspend/autosuspend.c
+index b87f59c..8518ab0 100644
+--- a/libsuspend/autosuspend.c
++++ b/libsuspend/autosuspend.c
+@@ -32,6 +32,12 @@ static int autosuspend_init(void) {
+         return 0;
+     }
+
++    autosuspend_ops = autosuspend_earlysuspend_init();
++    if (autosuspend_ops == NULL) {
++       ALOGE("failed to initialize autosuspend_earlysuspend");
++        return -1;
++    }
++
+     autosuspend_ops = autosuspend_wakeup_count_init();
+     if (autosuspend_ops == NULL) {
+         ALOGE("failed to initialize autosuspend");
+diff --git a/libsuspend/autosuspend_ops.h b/libsuspend/autosuspend_ops.h
+index b0024c8..a21f207 100644
+--- a/libsuspend/autosuspend_ops.h
++++ b/libsuspend/autosuspend_ops.h
+@@ -25,6 +25,7 @@ struct autosuspend_ops {
+ };
+
+ __BEGIN_DECLS
++struct autosuspend_ops *autosuspend_earlysuspend_init(void);
+ struct autosuspend_ops *autosuspend_wakeup_count_init(void);
+ __END_DECLS
+
+https://review.lineageos.org/c/LineageOS/android_system_core/+/219443
+https://review.lineageos.org/c/LineageOS/android_frameworks_av/+/185876/1
+https://review.lineageos.org/c/LineageOS/android_frameworks_av/+/185875/1
+
+https://github.com/MightyM17/android_hardware_ti_omap4/
+https://github.com/MightyM17/proprietary_vendor_samsung
+https://github.com/MightyM17/android_system_core/
+https://github.com/MightyM17/android_frameworks_av/
+https://github.com/Unlegacy-Android/android_external_stlport/
